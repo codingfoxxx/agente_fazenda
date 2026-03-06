@@ -1,6 +1,5 @@
 fastapi
 uvicorn
+pydantic
 openpyxl
-filelock
-python-dotenv
 python-multipart
