@@ -1,14 +1,17 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import shutil
 import os
 import openpyxl
 import unicodedata
 import re
+from datetime import datetime
 
 app = FastAPI(title="Agente Fazenda")
 
 PLANILHA_PATH = "/data/Planilha_fazenda.xlsm"
+BACKUP_DIR = "/data/backups"
 ABAS_IGNORADAS = {"PAGINA INICIAL", "PÁGINA INICIAL", "GERAL", "BASE", "LOG"}
 
 
@@ -21,24 +24,9 @@ def home():
     return {"status": "gado-agent rodando"}
 
 
-@app.post("/upload")
-async def upload_planilha(file: UploadFile = File(...)):
+def garantir_pastas():
     os.makedirs("/data", exist_ok=True)
-
-    if not file.filename:
-        return {"status": "erro", "detail": "Nenhum arquivo enviado."}
-
-    if not file.filename.lower().endswith(".xlsm"):
-        return {"status": "erro", "detail": "Envie um arquivo .xlsm"}
-
-    with open(PLANILHA_PATH, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    return {
-        "status": "planilha enviada com sucesso",
-        "filename": file.filename,
-        "path": PLANILHA_PATH
-    }
+    os.makedirs(BACKUP_DIR, exist_ok=True)
 
 
 def normalizar(texto: str) -> str:
@@ -57,22 +45,22 @@ def carregar_wb():
 
 def listar_fazendas():
     wb = carregar_wb()
+    ignoradas_norm = {normalizar(x) for x in ABAS_IGNORADAS}
     resultado = []
     for aba in wb.sheetnames:
-        if normalizar(aba).upper() not in {normalizar(x).upper() for x in ABAS_IGNORADAS}:
-            if normalizar(aba) not in {normalizar(x) for x in ABAS_IGNORADAS}:
-                resultado.append(aba)
+        if normalizar(aba) not in ignoradas_norm:
+            resultado.append(aba)
     return resultado
 
 
 def encontrar_linha_header(ws, max_linhas=80):
     for r in range(1, max_linhas + 1):
-        valor = ws.cell(r, 2).value  # coluna B
+        valor = ws.cell(r, 2).value
         if isinstance(valor, str):
             t = normalizar(valor).replace(" ", "")
             if "tipo" in t and "piquete" in t:
                 return r
-    raise ValueError(f"Header 'tipo \\ piquete' não encontrado na aba {ws.title}")
+    raise ValueError(f"Header 'tipo \\\\ piquete' não encontrado na aba {ws.title}")
 
 
 def construir_indice_fazenda(fazenda: str):
@@ -85,7 +73,7 @@ def construir_indice_fazenda(fazenda: str):
     header_row = encontrar_linha_header(ws)
 
     piquetes = []
-    col = 3  # C
+    col = 3
     while True:
         valor = ws.cell(header_row, col).value
         if valor is None:
@@ -139,7 +127,6 @@ def escolher_categoria(fazenda: str, nome_digitado: str):
         if normalizar(cat) == nome_n:
             return cat, row
 
-    # tenta singular/plural simples
     alternativas = [
         nome_n.rstrip("s"),
         nome_n + "s",
@@ -208,6 +195,17 @@ def quantidade_categoria_no_piquete(fazenda: str, categoria: str, piquete: str):
     return cat_real, piq_real, int(valor or 0)
 
 
+def criar_backup():
+    garantir_pastas()
+    if not os.path.exists(PLANILHA_PATH):
+        return None
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    backup_path = os.path.join(BACKUP_DIR, f"Planilha_fazenda_backup_{timestamp}.xlsm")
+    shutil.copy2(PLANILHA_PATH, backup_path)
+    return backup_path
+
+
 @app.post("/run")
 def run(req: RunRequest):
     texto = req.text.strip()
@@ -238,7 +236,6 @@ def run(req: RunRequest):
             cats = listar_categorias(fazenda_real)
             return {"reply": f"Categorias de {fazenda_real}: " + ", ".join(cats)}
 
-        # quantos bois tem no limão
         m = re.match(r"quantos?\s+(.+?)\s+tem\s+no?\s+(.+)$", texto_n)
         if m:
             categoria_txt = m.group(1).strip()
@@ -254,7 +251,6 @@ def run(req: RunRequest):
                 "reply": f"Em {fazenda_real}, há {total} de {cat_real}. Distribuição: {detalhes_txt}."
             }
 
-        # quantos bois no piquete 1 de são luiz
         m = re.match(r"quantos?\s+(.+?)\s+no\s+(.+?)\s+de\s+(.+)$", texto_n)
         if m:
             categoria_txt = m.group(1).strip()
@@ -275,9 +271,46 @@ def run(req: RunRequest):
         return {
             "reply": (
                 "Comandos disponíveis: 'fazendas', 'piquetes limão', 'categorias limão', "
-                "'quantos bois tem no limão', 'quantos bois no piquete 1 de são luiz'."
+                "'quantos bois tem no limão', 'quantos bois no coxo azul 2 de limão', "
+                "'me manda a planilha'."
             )
         }
 
     except Exception as e:
         return {"reply": f"Erro: {str(e)}"}
+
+
+@app.get("/download-planilha")
+def download_planilha():
+    if not os.path.exists(PLANILHA_PATH):
+        raise HTTPException(status_code=404, detail="Planilha não encontrada.")
+
+    nome_download = f"Planilha_fazenda_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.xlsm"
+    return FileResponse(
+        path=PLANILHA_PATH,
+        filename=nome_download,
+        media_type="application/vnd.ms-excel.sheet.macroEnabled.12"
+    )
+
+
+@app.post("/upload")
+async def upload_planilha(file: UploadFile = File(...)):
+    garantir_pastas()
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nenhum arquivo enviado.")
+
+    if not file.filename.lower().endswith(".xlsm"):
+        raise HTTPException(status_code=400, detail="Envie um arquivo .xlsm")
+
+    backup_path = criar_backup()
+
+    with open(PLANILHA_PATH, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    return {
+        "status": "planilha enviada com sucesso",
+        "filename": file.filename,
+        "path": PLANILHA_PATH,
+        "backup": backup_path
+    }
