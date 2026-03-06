@@ -3,3 +3,4 @@ uvicorn
 openpyxl
 filelock
 python-dotenv
+python-multipart
