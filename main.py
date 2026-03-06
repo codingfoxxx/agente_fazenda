@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 import shutil
 import os
+import openpyxl
 
 app = FastAPI(title="Agente Fazenda")
 
@@ -19,6 +20,16 @@ def home():
 
 @app.post("/run")
 def run(req: RunRequest):
+    texto = req.text.lower().strip()
+
+    if texto == "fazendas":
+        if not os.path.exists(PLANILHA_PATH):
+            return {"reply": f"Planilha não encontrada em {PLANILHA_PATH}"}
+
+        wb = openpyxl.load_workbook(PLANILHA_PATH, keep_vba=True)
+        abas = wb.sheetnames
+        return {"reply": "Abas encontradas: " + ", ".join(abas)}
+
     return {"reply": f"Recebi sua mensagem: {req.text}"}
 
 
