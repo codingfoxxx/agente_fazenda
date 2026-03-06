@@ -1,7 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
+import shutil
 
 app = FastAPI()
+
+PLANILHA_PATH = "/data/Planilha_fazenda.xlsm"
 
 @app.get("/")
 def home():
@@ -13,3 +16,11 @@ class RunRequest(BaseModel):
 @app.post("/run")
 def run(req: RunRequest):
     return {"reply": f"Recebi sua mensagem: {req.text}"}
+
+
+@app.post("/upload")
+def upload_planilha(file: UploadFile = File(...)):
+    with open(PLANILHA_PATH, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    return {"status": "planilha enviada com sucesso"}
