@@ -300,7 +300,8 @@ async def upload_planilha(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Nenhum arquivo enviado.")
 
-    if not file.filename.lower().endswith(".xlsm"):
+    nome_arquivo = file.filename.lower().strip()
+    if not nome_arquivo.endswith(".xlsm"):
         raise HTTPException(status_code=400, detail="Envie um arquivo .xlsm")
 
     backup_path = criar_backup()
